@@ -26,14 +26,36 @@ class MCTSNode {
 		    : state(state), available_actions(actions), parent(parent) {}
 
 		// 判斷是否為葉子節點
-		bool isLeaf() const { return children.empty(); }
+		bool isLeaf() const { 
+			bool result;
+			#pragma omp critical
+			{
+				result = children.empty();
+			}
+			return result; 
+		}
 
 		// UCT公式
 		double UCT(double exploration_param = 1.41) const {
-			if (visits == 0) return std::numeric_limits<double>::infinity();
-			return (wins / visits) +
-			       exploration_param *
-			           std::sqrt(std::log(parent->visits) / visits);
+			int local_visits;
+			#pragma omp atomic read
+			local_visits = visits; // 讀取 visits 使用 atomic 保護
+
+			if (local_visits == 0) return std::numeric_limits<double>::infinity();
+
+			double local_wins;
+			#pragma omp atomic read
+			local_wins = wins; // 讀取 wins 使用 atomic 保護
+
+			if (parent != nullptr) {
+        		int parent_visits;
+        		#pragma omp atomic read
+        		parent_visits = parent->visits;  // 使用 atomic 保護讀取 parent 的 visits
+        		return (local_wins / local_visits) + exploration_param * std::sqrt(std::log(parent_visits) / local_visits);
+    		} else {
+        		// 根節點的情況下，不考慮 parent->visits
+        		return local_wins / local_visits;
+    		}
 		}
 
 		// 隨機選擇未展開的動作
@@ -50,7 +72,7 @@ class MCTS {
 	public:
 		MCTSNode<State, Action>* root; // 根節點
 		double exploration_param = 1.41;
-		int simulation_count = 1000;
+		int simulation_count = 40000;
 
 		MCTS(const State& initial_state, const std::vector<Action>& actions) {
 			root = new MCTSNode<State, Action>(initial_state, actions);
@@ -60,6 +82,7 @@ class MCTS {
 
 		// 執行 MCTS
 		Action run(std::mt19937& rng) {
+			omp_set_num_threads(4);
 
 			#pragma omp parallel for
 			for (int i = 0; i < simulation_count; ++i) {
@@ -91,11 +114,14 @@ class MCTS {
 			MCTSNode<State, Action>* best_child = nullptr;
 			double best_uct = -std::numeric_limits<double>::infinity();
 
-			for (const auto& child : node->children) {
-				double uct_value = child->UCT(exploration_param);
-				if (uct_value > best_uct) {
-					best_uct = uct_value;
-					best_child = child.get();
+			#pragma omp critical
+			{
+				for (const auto& child : node->children) {
+					double uct_value = child->UCT(exploration_param);
+					if (uct_value > best_uct) {
+						best_uct = uct_value;
+						best_child = child.get();
+					}
 				}
 			}
 
@@ -111,9 +137,10 @@ class MCTS {
 				std::vector<Action> next_actions =
 				    next_state.getAvailableActions();
 
-				node->children.push_back(
-				    std::make_unique<MCTSNode<State, Action>>(
-				        next_state, next_actions, node));
+				#pragma omp critical
+				{
+					node->children.push_back(std::make_unique<MCTSNode<State, Action>>(next_state, next_actions, node));
+				}
 				return node->children.back().get();
 			}
 			return node;
