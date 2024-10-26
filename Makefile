@@ -27,6 +27,7 @@ all: $(APPNAME)
 
 # Builds the app
 $(APPNAME): $(OBJ)
+	mkdir -p $(BINDIR) $(OBJDIR) $(DEPDIR)
 	$(CC) $(CXXFLAGS) -o $(BINDIR)/$@ $^ $(LDFLAGS)
 
 # Creates the dependecy rules
